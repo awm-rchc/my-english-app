@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import random
+import time
 import streamlit.components.v1 as components
 from io import BytesIO
 
@@ -9,14 +10,17 @@ st.set_page_config(page_title="最強英文單字王", layout="centered", page_i
 
 # --- 2. 瀏覽器發音函數 (JavaScript) ---
 def speak_word(word):
-    # 加入隨機數確保每次觸發 JS 都能被瀏覽器偵測為新組件
+    # 使用 time.time() 產生唯一的 ID，強制 Streamlit 每次點擊都重新執行這段 JS
+    t = time.time()
     js_code = f"""
-    <script>
-    var msg = new SpeechSynthesisUtterance('{word}');
-    msg.lang = 'en-US';
-    msg.rate = 0.9; // 稍微放慢一點點，聽得更清楚
-    window.speechSynthesis.speak(msg);
-    </script>
+    <div id="{t}" style="display:none;">
+        <script>
+        var msg = new SpeechSynthesisUtterance('{word}');
+        msg.lang = 'en-US';
+        msg.rate = 0.9;
+        window.speechSynthesis.speak(msg);
+        </script>
+    </div>
     """
     components.html(js_code, height=0)
 
@@ -25,6 +29,7 @@ def speak_word(word):
 def load_data(file):
     try:
         df = pd.read_excel(file)
+        # 強制將所有欄位名稱轉為首字母大寫，確保 Word 和 Definition 讀取正常
         df.columns = [str(c).strip().capitalize() for c in df.columns]
         return df.to_dict('records')
     except Exception as e:
@@ -54,6 +59,7 @@ with st.sidebar:
 
     if st.session_state.wrong_list:
         st.subheader("📥 錯題本")
+        # 移除重複的錯題並提供下載
         wrong_df = pd.DataFrame(st.session_state.wrong_list).drop_duplicates()
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -66,6 +72,7 @@ st.title("🏆 英文全能練習工具")
 uploaded_file = st.file_uploader("第一步：上傳你的單字表 (XLSX)", type=["xlsx"])
 
 if uploaded_file:
+    # 處理新檔案或更換檔案
     if uploaded_file.name != st.session_state.current_filename:
         loaded_data = load_data(uploaded_file)
         if loaded_data:
@@ -79,6 +86,7 @@ if uploaded_file:
             st.session_state.answer_mode = False
             st.rerun()
 
+    # 檢查是否完成所有題目
     if st.session_state.current_idx >= len(st.session_state.quiz_queue):
         st.balloons()
         st.success(f"🎉 太棒了！你已完成【{st.session_state.current_filename}】！")
@@ -90,19 +98,24 @@ if uploaded_file:
             st.session_state.answer_mode = False
             st.rerun()
     else:
+        # 獲取當前題目
         q_idx = st.session_state.quiz_queue[st.session_state.current_idx]
         current_item = st.session_state.data[q_idx]
         correct_word = str(current_item['Word']).strip()
         definition = current_item['Definition']
 
         st.subheader(f"📂 當前練習：{st.session_state.current_filename}")
+        
+        # 進度顯示
         progress = (st.session_state.current_idx) / len(st.session_state.quiz_queue)
         st.progress(min(progress, 1.0))
         st.caption(f"進度: {st.session_state.current_idx + 1} / {len(st.session_state.quiz_queue)} | 目前得分: {st.session_state.score}")
 
         st.info(f"💡 定義：{definition}")
 
+        # --- 判斷目前是「答題中」還是「看結果」 ---
         if not st.session_state.answer_mode:
+            # 答題模式
             if mode == "拼字練習":
                 with st.form(key='spelling_form', clear_on_submit=True):
                     user_ans = st.text_input("請拼出單字：").strip()
@@ -117,10 +130,10 @@ if uploaded_file:
                     else:
                         st.session_state.last_result = "wrong"
                         st.session_state.wrong_list.append(current_item)
-                        st.session_state.quiz_queue.append(q_idx)
+                        st.session_state.quiz_queue.append(q_idx) # 錯題加強，放回隊伍末端
                     st.rerun()
 
-            else:
+            else: # 四選一模式
                 all_words = [str(d['Word']).strip() for d in st.session_state.data]
                 others = [w for w in all_words if w.lower() != correct_word.lower()]
                 distractors = random.sample(others, min(3, len(others)))
@@ -143,21 +156,23 @@ if uploaded_file:
                         st.rerun()
 
         else:
+            # 結果顯示模式
             if st.session_state.last_result == "correct":
                 st.success(f"✅ 正確！答案是：**{correct_word}**")
             else:
                 st.error(f"❌ 錯誤！正確答案應該是：**{correct_word}**")
             
-            # 手動發音按鈕
+            # 發音按鈕 (支持重複點擊發聲)
             if st.button(f"🔊 聽發音: {correct_word}", use_container_width=True):
                 speak_word(correct_word)
             
             st.divider()
 
+            # 手動確認跳轉至下一題
             if st.button("下一題 ⏭️", use_container_width=True, type="primary"):
                 st.session_state.answer_mode = False
                 st.session_state.current_idx += 1
                 st.rerun()
 
 else:
-    st.write("👋 歡迎使用！請上傳 Excel 開始練習。")
+    st.write("👋 歡迎使用！請上傳含有 **Word** 與 **Definition** 欄位的 Excel 檔案開始練習。")
