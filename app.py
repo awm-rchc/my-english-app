@@ -24,11 +24,11 @@ def speak_word(word):
 def load_data(file):
     try:
         df = pd.read_excel(file)
-        # 強制將所有欄位名稱轉為首字母大寫，避免大小寫不匹配
+        # 強制將所有欄位名稱轉為首字母大寫
         df.columns = [str(c).strip().capitalize() for c in df.columns]
         return df.to_dict('records')
     except Exception as e:
-        st.error(f"讀取檔案失敗，請確保 Excel 格式正確：{e}")
+        st.error(f"讀取檔案失敗：{e}")
         return []
 
 # --- 4. 初始化 Session State ---
@@ -39,6 +39,7 @@ if 'data' not in st.session_state:
     st.session_state.wrong_list = []
     st.session_state.quiz_queue = []
     st.session_state.initialized = False
+    st.session_state.current_filename = "" # 新增：紀錄檔名
 
 # --- 5. 側邊欄設定 ---
 with st.sidebar:
@@ -65,22 +66,29 @@ st.title("🏆 英文全能練習工具")
 uploaded_file = st.file_uploader("第一步：上傳你的單字表 (XLSX)", type=["xlsx"])
 
 if uploaded_file:
-    # 初始化資料
-    if not st.session_state.initialized:
+    # 如果上傳了新檔案，且檔名與之前紀錄的不同，則重新初始化
+    if uploaded_file.name != st.session_state.current_filename:
         loaded_data = load_data(uploaded_file)
         if loaded_data:
             st.session_state.data = loaded_data
             st.session_state.quiz_queue = random.sample(range(len(loaded_data)), len(loaded_data))
+            st.session_state.current_idx = 0
+            st.session_state.score = 0
+            st.session_state.wrong_list = []
+            st.session_state.current_filename = uploaded_file.name # 更新儲存的檔名
             st.session_state.initialized = True
             st.rerun()
 
     # 檢查是否已完成所有題目
     if st.session_state.current_idx >= len(st.session_state.quiz_queue):
         st.balloons()
-        st.success("🎉 太棒了！你已完成本次練習清單中所有的單字！")
+        st.success(f"🎉 太棒了！你已完成【{st.session_state.current_filename}】中的所有單字！")
         st.metric("最終得分", f"{st.session_state.score} 分")
         if st.button("🔄 重新開始練習"):
-            st.session_state.clear()
+            # 僅重置進度，保留目前的資料與檔名
+            st.session_state.quiz_queue = random.sample(range(len(st.session_state.data)), len(st.session_state.data))
+            st.session_state.current_idx = 0
+            st.session_state.score = 0
             st.rerun()
     else:
         # 獲取當前題目資訊
@@ -88,6 +96,9 @@ if uploaded_file:
         current_item = st.session_state.data[q_idx]
         correct_word = str(current_item['Word']).strip()
         definition = current_item['Definition']
+
+        # --- 顯示當前練習檔案名稱 ---
+        st.subheader(f"📂 當前練習：{st.session_state.current_filename}")
 
         # 顯示進度
         progress = (st.session_state.current_idx) / len(st.session_state.quiz_queue)
@@ -100,7 +111,7 @@ if uploaded_file:
         # 模式 A: 拼字練習
         if mode == "拼字練習":
             with st.form(key='spelling_form', clear_on_submit=True):
-                user_ans = st.text_input("請拼出單字：", help="不分大小寫").strip()
+                user_ans = st.text_input("請拼出單字：").strip()
                 submitted = st.form_submit_button("提交答案")
             
             if submitted:
@@ -114,7 +125,6 @@ if uploaded_file:
                 else:
                     st.error(f"❌ 錯誤！正確答案是 {correct_word}")
                     st.session_state.wrong_list.append(current_item)
-                    # 錯題加強：放回隊列後方
                     st.session_state.quiz_queue.append(q_idx)
                     st.session_state.current_idx += 1
                     time.sleep(2)
@@ -122,7 +132,6 @@ if uploaded_file:
 
         # 模式 B: 四選一
         else:
-            # 準備選項
             all_words = [str(d['Word']).strip() for d in st.session_state.data]
             others = [w for w in all_words if w.lower() != correct_word.lower()]
             distractors = random.sample(others, min(3, len(others)))
