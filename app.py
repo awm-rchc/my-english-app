@@ -9,10 +9,12 @@ st.set_page_config(page_title="最強英文單字王", layout="centered", page_i
 
 # --- 2. 瀏覽器發音函數 (JavaScript) ---
 def speak_word(word):
+    # 加入隨機數確保每次觸發 JS 都能被瀏覽器偵測為新組件
     js_code = f"""
     <script>
     var msg = new SpeechSynthesisUtterance('{word}');
     msg.lang = 'en-US';
+    msg.rate = 0.9; // 稍微放慢一點點，聽得更清楚
     window.speechSynthesis.speak(msg);
     </script>
     """
@@ -38,8 +40,8 @@ if 'data' not in st.session_state:
     st.session_state.quiz_queue = []
     st.session_state.initialized = False
     st.session_state.current_filename = ""
-    st.session_state.answer_mode = False # 新增：是否處於「顯示答案/結果」模式
-    st.session_state.last_result = None # 新增：紀錄上一次回答是正確還是錯誤
+    st.session_state.answer_mode = False 
+    st.session_state.last_result = None 
 
 # --- 5. 側邊欄設定 ---
 with st.sidebar:
@@ -64,7 +66,6 @@ st.title("🏆 英文全能練習工具")
 uploaded_file = st.file_uploader("第一步：上傳你的單字表 (XLSX)", type=["xlsx"])
 
 if uploaded_file:
-    # 處理新檔案上傳
     if uploaded_file.name != st.session_state.current_filename:
         loaded_data = load_data(uploaded_file)
         if loaded_data:
@@ -78,7 +79,6 @@ if uploaded_file:
             st.session_state.answer_mode = False
             st.rerun()
 
-    # 檢查是否完成所有題目
     if st.session_state.current_idx >= len(st.session_state.quiz_queue):
         st.balloons()
         st.success(f"🎉 太棒了！你已完成【{st.session_state.current_filename}】！")
@@ -102,9 +102,7 @@ if uploaded_file:
 
         st.info(f"💡 定義：{definition}")
 
-        # --- 邏輯核心：根據模式顯示內容 ---
         if not st.session_state.answer_mode:
-            # 模式 A：輸入/選擇階段
             if mode == "拼字練習":
                 with st.form(key='spelling_form', clear_on_submit=True):
                     user_ans = st.text_input("請拼出單字：").strip()
@@ -122,7 +120,7 @@ if uploaded_file:
                         st.session_state.quiz_queue.append(q_idx)
                     st.rerun()
 
-            else: # 四選一模式
+            else:
                 all_words = [str(d['Word']).strip() for d in st.session_state.data]
                 others = [w for w in all_words if w.lower() != correct_word.lower()]
                 distractors = random.sample(others, min(3, len(others)))
@@ -145,13 +143,18 @@ if uploaded_file:
                         st.rerun()
 
         else:
-            # 模式 B：顯示結果與等待確認階段
             if st.session_state.last_result == "correct":
                 st.success(f"✅ 正確！答案是：**{correct_word}**")
             else:
                 st.error(f"❌ 錯誤！正確答案應該是：**{correct_word}**")
             
-            if st.button("下一題 ⏭️", use_container_width=True):
+            # 手動發音按鈕
+            if st.button(f"🔊 聽發音: {correct_word}", use_container_width=True):
+                speak_word(correct_word)
+            
+            st.divider()
+
+            if st.button("下一題 ⏭️", use_container_width=True, type="primary"):
                 st.session_state.answer_mode = False
                 st.session_state.current_idx += 1
                 st.rerun()
