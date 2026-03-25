@@ -4,14 +4,14 @@ import random
 import time
 import streamlit.components.v1 as components
 from io import BytesIO
-import difflib  # 新增：用於比對字串差異
+import difflib  # 用於比對字串差異
 
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="專業英文單字王", layout="centered", page_icon="🌿")
 
-# --- 2. 瀏覽器發音函數 ---
+# --- 2. 瀏覽器發音函數 (GEMS 知識庫優化版) ---
 def speak_word(word):
-    t = time.time()
+    t = time.time() # 強制重新渲染 JS
     js_code = f"""
     <div id="{t}" style="display:none;">
         <script>
@@ -24,30 +24,41 @@ def speak_word(word):
     """
     components.html(js_code, height=0)
 
-# --- 3. 差異標註函數 (核心新增) ---
+# --- 3. 差異標註函數 ---
 def get_diff_html(user_input, correct_word):
-    """
-    比較兩個單字並回傳帶有 HTML 標籤的標註結果
-    """
     result = ""
-    # 使用 ndiff 取得差異序列
     diff = difflib.ndiff(user_input.lower(), correct_word.lower())
-    
     for char in diff:
-        if char.startswith('  '): # 相同字母
+        if char.startswith('  '): # 相同
             result += f"<span style='color:gray;'>{char[2:]}</span>"
-        elif char.startswith('- '): # 使用者多打的 (應刪除)
-            result += f"<strikethrough style='color:#ff4b4b; background-color:#ffcccc; text-decoration:line-through;'>{char[2:]}</strikethrough>"
-        elif char.startswith('+ '): # 使用者漏打的 (應補上)
+        elif char.startswith('- '): # 多打
+            result += f"<span style='color:#ff4b4b; background-color:#ffcccc; text-decoration:line-through;'>{char[2:]}</span>"
+        elif char.startswith('+ '): # 漏打
             result += f"<b style='color:#28a745; background-color:#e6ffed; border-bottom:2px solid green;'>{char[2:]}</b>"
     return result
 
-# --- 4. 讀取資料 (參考知識庫：欄位標準化) ---
+# --- 4. 讀取與過濾資料 (關鍵修正：排除 --- 與空行) ---
 @st.cache_data
 def load_data(file):
     try:
         df = pd.read_excel(file)
+        # 強制標準化欄位名稱：移除空格並首字母大寫
         df.columns = [str(c).strip().capitalize() for c in df.columns]
+        
+        # 過濾邏輯
+        df = df.dropna(how='all') # 移除全空行
+        if 'Words' in df.columns:
+            # 移除 Words 為空或包含分隔線 '---' 的行
+            df = df[df['Words'].notna()]
+            df = df[df['Words'].astype(str).str.strip() != '---']
+        
+        # 確保 Grouping 欄位格式正確，避免 sorted 報錯
+        if 'Grouping' in df.columns:
+            df['Grouping'] = df['Grouping'].fillna('未分類').astype(str).str.strip()
+        else:
+            st.error("❌ Excel 缺少 'Grouping' 欄位")
+            return None
+            
         return df
     except Exception as e:
         st.error(f"讀取失敗：{e}")
@@ -77,11 +88,11 @@ with st.sidebar:
         groups = ["全部"] + sorted(st.session_state.all_data['Grouping'].unique().tolist())
         new_group = st.selectbox("選擇單字組 (Grouping)", groups)
         
-        # 切換組別邏輯
         if new_group != st.session_state.selected_group:
             st.session_state.selected_group = new_group
             filtered_df = st.session_state.all_data if new_group == "全部" else st.session_state.all_data[st.session_state.all_data['Grouping'] == new_group]
             st.session_state.quiz_data = filtered_df.to_dict('records')
+            # 建立題號隊列並洗牌
             st.session_state.quiz_queue = random.sample(range(len(st.session_state.quiz_data)), len(st.session_state.quiz_data))
             st.session_state.current_idx = 0
             st.session_state.answer_mode = False
@@ -95,7 +106,7 @@ with st.sidebar:
 # --- 7. 主介面 ---
 st.title("🌿 專業英文單字練習")
 
-uploaded_file = st.file_uploader("上傳 XLSX 單字表", type=["xlsx"])
+uploaded_file = st.file_uploader("第一步：上傳 XLSX 單字表", type=["xlsx"])
 
 if uploaded_file:
     if uploaded_file.name != st.session_state.current_filename:
@@ -110,10 +121,12 @@ if uploaded_file:
             st.rerun()
 
 if st.session_state.all_data is not None:
+    # 判斷是否完成所有題目
     if st.session_state.current_idx >= len(st.session_state.quiz_queue):
         st.balloons()
-        st.success("🎉 練習完成！")
-        if st.button("🔄 重新開始"):
+        st.success("🎉 本組練習已完成！")
+        if st.button("🔄 重新開始本組"):
+            st.session_state.quiz_queue = random.sample(range(len(st.session_state.quiz_data)), len(st.session_state.quiz_data))
             st.session_state.current_idx = 0
             st.session_state.answer_mode = False
             st.rerun()
@@ -132,14 +145,14 @@ if st.session_state.all_data is not None:
                 with st.form(key='spelling_form', clear_on_submit=True):
                     user_ans = st.text_input("請拼出單字：").strip()
                     if st.form_submit_button("提交答案"):
-                        st.session_state.user_input_history = user_ans
-                        st.session_state.answer_mode = True
+                        st.session_state.user_input_history = user_ans # 保留錯誤軌跡
+                        st.session_state.answer_mode = True # 進入結果模式防止閃過
                         if user_ans.lower() == correct_word.lower():
                             st.session_state.last_result = "correct"
                             speak_word(correct_word)
                         else:
                             st.session_state.last_result = "wrong"
-                            st.session_state.quiz_queue.append(q_idx) # 錯題強化邏輯
+                            st.session_state.quiz_queue.append(q_idx) # 錯題強化邏析
                         st.rerun()
             else:
                 # 四選一模式
@@ -161,30 +174,23 @@ if st.session_state.all_data is not None:
                             st.session_state.quiz_queue.append(q_idx)
                         st.rerun()
         else:
-            # 結果顯示模式
+            # 結果顯示區
             if st.session_state.last_result == "correct":
                 st.success(f"✅ 正確！答案就是 **{correct_word}**")
             else:
                 st.error(f"❌ 錯誤！正確答案是：**{correct_word}**")
-                
-                # 顯示自動標註差異
+                # 差異標註
                 diff_html = get_diff_html(st.session_state.user_input_history, correct_word)
                 st.markdown(f"""
-                <div style="background-color:#f9f9f9; padding:15px; border-radius:10px; border:1px solid #ddd; line-height:1.6;">
-                    <p style="margin-bottom:5px; color:#555;">🔍 <b>差異分析：</b></p>
-                    <div style="font-family: monospace; font-size: 1.2em; letter-spacing: 2px;">
-                        {diff_html}
-                    </div>
-                    <p style="font-size: 0.8em; color: #888; margin-top: 10px;">
-                        標記說明：<span style="color:#28a745; background-color:#e6ffed;"><b>綠色加底線</b></span> 為漏掉的字母，
-                        <span style="color:#ff4b4b; background-color:#ffcccc; text-decoration:line-through;">紅色刪除線</span> 為多打的字母。
-                    </p>
+                <div style="background-color:#f9f9f9; padding:15px; border-radius:10px; border:1px solid #ddd;">
+                    <p style="color:#555; font-size:0.9em;">🔍 <b>核對拼字差異：</b></p>
+                    <div style="font-family: monospace; font-size: 1.3em; letter-spacing: 2px;">{diff_html}</div>
                 </div>
                 """, unsafe_allow_html=True)
             
-            # 補充資訊
+            # 顯示備用提示
             other_hint = item['Definition'] if hint_type == "中文 (Chinese)" else item['Chinese']
-            st.write(f"🔍 補充：{other_hint}")
+            st.caption(f"🔍 補充提示：{other_hint}")
 
             col_a, col_b = st.columns(2)
             with col_a:
